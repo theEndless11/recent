@@ -7,7 +7,7 @@ const dbConfig = {
   host: 'gateway01.ap-southeast-1.prod.aws.tidbcloud.com',
   port: 4000,
   user: '3MpxXZ6aU48Rwn2.root',
-  password: '<PASSWORD>', // Replace with your actual password or use environment variable
+  password: '73O5MeujubpOyRsD', // Replace with your actual password or use environment variable
   database: 'test',
   waitForConnections: true,
   connectionLimit: 10,
