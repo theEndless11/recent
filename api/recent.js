@@ -42,7 +42,7 @@ export default async function handler(req, res) {
   }
 }
 
-// GET handler - Fetch recent chats with real unseen counts
+// GET handler
 async function handleGet(req, res, connection, query) {
   const { userId, action } = query;
 
@@ -56,26 +56,18 @@ async function handleGet(req, res, connection, query) {
         SELECT 
           rc.chat_user_id AS userId,
           rc.chat_user_id AS id,
-          rc.username,
           rc.last_message AS lastMessage,
           rc.last_seen AS lastSeen,
-          COALESCE(unseen_counts.unreadCount, 0) AS unreadCount
+          rc.unread_count AS unreadCount
         FROM recent_chats rc
-        LEFT JOIN (
-          SELECT username AS chatUserId, COUNT(*) AS unreadCount
-          FROM messages
-          WHERE chatwith = ? AND seen = FALSE
-          GROUP BY username
-        ) AS unseen_counts ON unseen_counts.chatUserId = rc.chat_user_id
         WHERE rc.user_id = ?
         ORDER BY rc.updated_at DESC
         LIMIT 20
-      `, [userId, userId]);
+      `, [userId]);
 
       const recentChats = rows.map(row => ({
         userId: row.userId,
         id: row.id,
-        username: row.username || `User ${row.userId}`,
         lastMessage: row.lastMessage || 'Tap to start chatting',
         lastSeen: row.lastSeen || new Date().toISOString(),
         unreadCount: row.unreadCount || 0
@@ -92,7 +84,7 @@ async function handleGet(req, res, connection, query) {
   return res.status(400).json({ error: 'Invalid action for GET request' });
 }
 
-// POST handler - Batch update recent chats (unchanged)
+// POST handler
 async function handlePost(req, res, connection, body) {
   const { action, updates } = body;
 
@@ -114,8 +106,8 @@ async function handlePost(req, res, connection, body) {
 
         await connection.execute(`
           INSERT INTO recent_chats (
-            user_id, chat_user_id, 
-            last_message, last_seen, unread_count, 
+            user_id, chat_user_id,
+            last_message, last_seen, unread_count,
             created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, NOW(), NOW())
           ON DUPLICATE KEY UPDATE
@@ -148,7 +140,7 @@ async function handlePost(req, res, connection, body) {
   return res.status(400).json({ error: 'Invalid action for POST request' });
 }
 
-// PATCH handler - Clear unread count (unchanged)
+// PATCH handler
 async function handlePatch(req, res, connection, body) {
   const { action, userId, chatUserId } = body;
 
@@ -167,17 +159,16 @@ async function handlePatch(req, res, connection, body) {
       if (result.affectedRows === 0) {
         await connection.execute(`
           INSERT INTO recent_chats (
-            user_id, chat_user_id, username,
+            user_id, chat_user_id,
             last_message, last_seen, unread_count,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, 0, NOW(), NOW())
+          ) VALUES (?, ?, ?, ?, 0, NOW(), NOW())
           ON DUPLICATE KEY UPDATE
             unread_count = 0,
             updated_at = NOW()
         `, [
           userId,
           chatUserId,
-          `User ${chatUserId}`,
           'Tap to start chatting',
           new Date().toISOString()
         ]);
