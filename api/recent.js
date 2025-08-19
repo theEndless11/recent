@@ -114,12 +114,11 @@ async function handlePost(req, res, connection, body) {
 
         await connection.execute(`
           INSERT INTO recent_chats (
-            user_id, chat_user_id, username, 
+            user_id, chat_user_id, 
             last_message, last_seen, unread_count, 
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
+          ) VALUES (?, ?, ?, ?, ?, NOW(), NOW())
           ON DUPLICATE KEY UPDATE
-            username = VALUES(username),
             last_message = VALUES(last_message),
             last_seen = VALUES(last_seen),
             unread_count = CASE 
@@ -130,7 +129,6 @@ async function handlePost(req, res, connection, body) {
         `, [
           userId,
           chatData.userId,
-          chatData.username,
           chatData.lastMessage,
           chatData.lastSeen,
           chatData.unreadCount || 0
