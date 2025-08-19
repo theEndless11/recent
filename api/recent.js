@@ -1,4 +1,3 @@
-
 const pool = require('../utils/db');
 
 const setCorsHeaders = res => {
@@ -43,7 +42,7 @@ export default async function handler(req, res) {
   }
 }
 
-// GET handler - Fetch recent chats
+// GET handler - Fetch recent chats with real unseen counts
 async function handleGet(req, res, connection, query) {
   const { userId, action } = query;
 
@@ -60,12 +59,18 @@ async function handleGet(req, res, connection, query) {
           rc.username,
           rc.last_message AS lastMessage,
           rc.last_seen AS lastSeen,
-          rc.unread_count AS unreadCount
+          COALESCE(unseen_counts.unreadCount, 0) AS unreadCount
         FROM recent_chats rc
+        LEFT JOIN (
+          SELECT username AS chatUserId, COUNT(*) AS unreadCount
+          FROM messages
+          WHERE chatwith = ? AND seen = FALSE
+          GROUP BY username
+        ) AS unseen_counts ON unseen_counts.chatUserId = rc.chat_user_id
         WHERE rc.user_id = ?
         ORDER BY rc.updated_at DESC
         LIMIT 20
-      `, [userId]);
+      `, [userId, userId]);
 
       const recentChats = rows.map(row => ({
         userId: row.userId,
@@ -87,7 +92,7 @@ async function handleGet(req, res, connection, query) {
   return res.status(400).json({ error: 'Invalid action for GET request' });
 }
 
-// POST handler - Batch update recent chats
+// POST handler - Batch update recent chats (unchanged)
 async function handlePost(req, res, connection, body) {
   const { action, updates } = body;
 
@@ -145,7 +150,7 @@ async function handlePost(req, res, connection, body) {
   return res.status(400).json({ error: 'Invalid action for POST request' });
 }
 
-// PATCH handler - Clear unread count
+// PATCH handler - Clear unread count (unchanged)
 async function handlePatch(req, res, connection, body) {
   const { action, userId, chatUserId } = body;
 
