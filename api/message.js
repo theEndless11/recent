@@ -23,10 +23,10 @@ module.exports = async function handler(req, res) {
       const sql = `
         SELECT id, username, chatwith, message, photo, timestamp, seen
         FROM messages
-        WHERE (username = $1 AND chatwith = $2) OR (username = $2 AND chatwith = $1)
+        WHERE (username = ? AND chatwith = ?) OR (username = ? AND chatwith = ?)
         ORDER BY timestamp;
       `;
-      const { rows } = await pool.query(sql, [u1, u2]);
+      const [rows] = await pool.query(sql, [u1, u2, u2, u1]);
 
       if (!rows.length) {
         return res.status(404).json({ error: 'No messages found' });
@@ -48,8 +48,8 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ error: 'Invalid message ID' });
       }
 
-      const result = await pool.query('UPDATE messages SET seen = TRUE WHERE id = $1', [msgId]);
-      return result.rowCount
+      const [result] = await pool.query('UPDATE messages SET seen = TRUE WHERE id = ?', [msgId]);
+      return result.affectedRows
         ? res.status(200).json({ message: 'Message marked as seen' })
         : res.status(404).json({ error: 'Message not found' });
     }
@@ -61,18 +61,18 @@ module.exports = async function handler(req, res) {
         return res.status(400).json({ error: 'Invalid request payload' });
       }
 
-      const placeholders = messageIds.map((_, i) => `$${i + 1}`).join(',');
+      const placeholders = messageIds.map(() => '?').join(', ');
       const updateQuery = `
         UPDATE messages
         SET seen = TRUE
         WHERE id IN (${placeholders})
-          AND username = $${messageIds.length + 1}
-          AND chatwith = $${messageIds.length + 2}
+          AND username = ?
+          AND chatwith = ?
       `;
       const params = [...messageIds, chatWith.toLowerCase(), currentUser.toLowerCase()];
 
-      const result = await pool.query(updateQuery, params);
-      return res.status(200).json({ updated: result.rowCount });
+      const [result] = await pool.query(updateQuery, params);
+      return res.status(200).json({ updated: result.affectedRows });
     }
 
     // POST: Add a new message
@@ -87,14 +87,14 @@ module.exports = async function handler(req, res) {
 
       const insertSql = `
         INSERT INTO messages (username, chatwith, message, photo, timestamp)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING *;
+        VALUES (?, ?, ?, ?, ?)
       `;
-      const result = await pool.query(insertSql, [
-        u1, u2, message || '', photoPath, timestamp || new Date().toISOString()
-      ]);
+      const params = [u1, u2, message || '', photoPath, timestamp || new Date().toISOString()];
+      const [result] = await pool.query(insertSql, params);
 
-      return res.status(201).json({ message: result.rows[0] });
+      // Fetch the inserted message (using the insertId)
+      const [rows] = await pool.query('SELECT * FROM messages WHERE id = ?', [result.insertId]);
+      return res.status(201).json({ message: rows[0] });
     }
 
     // If method not handled
@@ -105,6 +105,7 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 };
+
 
 
 
