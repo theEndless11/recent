@@ -15,9 +15,10 @@ export default async function handler(req, res) {
   }
 
   const { method, query, body } = req;
+  let connection;
 
   try {
-    const connection = await pool.getConnection();
+    connection = await pool.getConnection();
 
     if (method === 'GET') {
       return await handleGet(req, res, connection, query);
@@ -39,10 +40,14 @@ export default async function handler(req, res) {
       error: 'Internal server error',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 }
 
-// GET handler
+// Direct database query - ultra-optimized
 async function handleGet(req, res, connection, query) {
   const { userId, action } = query;
 
@@ -52,30 +57,75 @@ async function handleGet(req, res, connection, query) {
     }
 
     try {
+      const startTime = Date.now();
+      
+      // Single lightning-fast query
       const [rows] = await connection.execute(`
-  SELECT 
-    rc.chat_user_id AS userId,
-    rc.chat_user_id AS id,
-    rc.chat_username AS username,
-    rc.chat_profile_picture AS profile_picture,
-    rc.last_message AS lastMessage,
-    rc.last_seen AS lastSeen,
-    rc.unread_count AS unreadCount
-  FROM recent_chats rc
-  WHERE rc.user_id = ?
-  ORDER BY rc.updated_at DESC
-  LIMIT 20
-`, [userId]);
+        SELECT 
+          chat_partner.user_id AS userId,
+          chat_partner.user_id AS id,
+          COALESCE(rc.chat_username, CONCAT('User ', chat_partner.user_id)) AS username,
+          COALESCE(rc.chat_profile_picture, 'default-pfp.jpg') AS profile_picture,
+          latest_msg.content AS lastMessage,
+          latest_msg.created_at AS lastSeen,
+          COALESCE(unread_count.count, 0) AS unreadCount
+        FROM (
+          SELECT DISTINCT
+            CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END AS user_id
+          FROM messages 
+          WHERE sender_id = ? OR receiver_id = ?
+          ORDER BY 
+            (SELECT MAX(created_at) FROM messages m 
+             WHERE (m.sender_id = ? AND m.receiver_id = CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END)
+                OR (m.receiver_id = ? AND m.sender_id = CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END)
+            ) DESC
+          LIMIT 20
+        ) chat_partner
+        
+        LEFT JOIN (
+          SELECT 
+            CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END AS other_user_id,
+            content,
+            created_at,
+            ROW_NUMBER() OVER (
+              PARTITION BY CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END 
+              ORDER BY created_at DESC
+            ) as rn
+          FROM messages 
+          WHERE sender_id = ? OR receiver_id = ?
+        ) latest_msg ON latest_msg.other_user_id = chat_partner.user_id AND latest_msg.rn = 1
+        
+        LEFT JOIN (
+          SELECT sender_id, COUNT(*) as count
+          FROM messages 
+          WHERE receiver_id = ? AND is_read = FALSE
+          GROUP BY sender_id
+        ) unread_count ON unread_count.sender_id = chat_partner.user_id
+        
+        LEFT JOIN recent_chats rc ON rc.user_id = ? AND rc.chat_user_id = chat_partner.user_id
+        
+        ORDER BY latest_msg.created_at DESC
+      `, [
+        userId, userId, userId, userId, userId, userId, userId, // chat_partner subquery
+        userId, userId, userId, userId, // latest_msg subquery  
+        userId, // unread_count subquery
+        userId  // recent_chats join
+      ]);
 
-const recentChats = rows.map(row => ({
-  userId: row.userId,
-  id: row.id,
-  username: row.username,
-  profile_picture: row.profile_picture || 'default-pfp.jpg',
-  lastMessage: row.lastMessage || 'Tap to start chatting',
-  lastSeen: row.lastSeen || new Date().toISOString(),
-  unreadCount: row.unreadCount || 0
-}));
+      const duration = Date.now() - startTime;
+      console.log(`Direct query executed in ${duration}ms for user ${userId}`);
+      
+      const recentChats = rows.map(row => ({
+        userId: row.userId,
+        id: row.id,
+        username: row.username,
+        profile_picture: row.profile_picture,
+        lastMessage: row.lastMessage || 'Tap to start chatting',
+        lastSeen: row.lastSeen,
+        unreadCount: row.unreadCount,
+        isOnline: false
+      }));
+
       return res.status(200).json({ recentChats });
 
     } catch (error) {
@@ -87,7 +137,6 @@ const recentChats = rows.map(row => ({
   return res.status(400).json({ error: 'Invalid action for GET request' });
 }
 
-// POST handler
 async function handlePost(req, res, connection, body) {
   const { action, updates } = body;
 
@@ -99,41 +148,34 @@ async function handlePost(req, res, connection, body) {
     try {
       await connection.beginTransaction();
 
+      const values = [];
+      const placeholders = [];
+
       for (const update of updates) {
         const { userId, chatData } = update;
+        if (!userId || !chatData) continue;
 
-        if (!userId || !chatData) {
-          console.warn('Skipping invalid update:', update);
-          continue;
-        }
+        placeholders.push('(?, ?, ?, ?, ?, ?, ?, NOW(), NOW())');
+        values.push(
+          userId, chatData.userId, chatData.username, chatData.profile_picture,
+          chatData.lastMessage, chatData.lastSeen, chatData.unreadCount || 0
+        );
+      }
 
+      if (placeholders.length > 0) {
         await connection.execute(`
-  INSERT INTO recent_chats (
-    user_id, chat_user_id,
-    chat_username, chat_profile_picture, -- NEW
-    last_message, last_seen, unread_count,
-    created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-  ON DUPLICATE KEY UPDATE
-    chat_username = VALUES(chat_username), -- NEW
-    chat_profile_picture = VALUES(chat_profile_picture), -- NEW
-    last_message = VALUES(last_message),
-    last_seen = VALUES(last_seen),
-    unread_count = CASE 
-      WHEN VALUES(unread_count) > 0 THEN VALUES(unread_count)
-      ELSE unread_count 
-    END,
-    updated_at = NOW()
-`, [
-  userId,
-  chatData.userId,
-  chatData.username,
-  chatData.profile_picture,
-  chatData.lastMessage,
-  chatData.lastSeen,
-  chatData.unreadCount || 0
-]);
-
+          INSERT INTO recent_chats (
+            user_id, chat_user_id, chat_username, chat_profile_picture,
+            last_message, last_seen, unread_count, created_at, updated_at
+          ) VALUES ${placeholders.join(', ')}
+          ON DUPLICATE KEY UPDATE
+            chat_username = VALUES(chat_username),
+            chat_profile_picture = VALUES(chat_profile_picture),
+            last_message = VALUES(last_message),
+            last_seen = VALUES(last_seen),
+            unread_count = VALUES(unread_count),
+            updated_at = NOW()
+        `, values);
       }
 
       await connection.commit();
@@ -149,7 +191,6 @@ async function handlePost(req, res, connection, body) {
   return res.status(400).json({ error: 'Invalid action for POST request' });
 }
 
-// PATCH handler
 async function handlePatch(req, res, connection, body) {
   const { action, userId, chatUserId } = body;
 
@@ -160,30 +201,15 @@ async function handlePatch(req, res, connection, body) {
 
     try {
       const [result] = await connection.execute(`
-        UPDATE recent_chats 
-        SET unread_count = 0, updated_at = NOW()
-        WHERE user_id = ? AND chat_user_id = ?
-      `, [userId, chatUserId]);
+        UPDATE messages 
+        SET is_read = TRUE 
+        WHERE sender_id = ? AND receiver_id = ? AND is_read = FALSE
+      `, [chatUserId, userId]);
 
-      if (result.affectedRows === 0) {
-        await connection.execute(`
-          INSERT INTO recent_chats (
-            user_id, chat_user_id,
-            last_message, last_seen, unread_count,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, 0, NOW(), NOW())
-          ON DUPLICATE KEY UPDATE
-            unread_count = 0,
-            updated_at = NOW()
-        `, [
-          userId,
-          chatUserId,
-          'Tap to start chatting',
-          new Date().toISOString()
-        ]);
-      }
-
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ 
+        success: true, 
+        messagesMarkedRead: result.affectedRows 
+      });
 
     } catch (error) {
       console.error('Error clearing unread count:', error);
