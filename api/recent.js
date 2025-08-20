@@ -105,26 +105,32 @@ async function handlePost(req, res, connection, body) {
         }
 
         await connection.execute(`
-          INSERT INTO recent_chats (
-            user_id, chat_user_id,
-            last_message, last_seen, unread_count,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, NOW(), NOW())
-          ON DUPLICATE KEY UPDATE
-            last_message = VALUES(last_message),
-            last_seen = VALUES(last_seen),
-            unread_count = CASE 
-              WHEN VALUES(unread_count) > 0 THEN VALUES(unread_count)
-              ELSE unread_count 
-            END,
-            updated_at = NOW()
-        `, [
-          userId,
-          chatData.userId,
-          chatData.lastMessage,
-          chatData.lastSeen,
-          chatData.unreadCount || 0
-        ]);
+  INSERT INTO recent_chats (
+    user_id, chat_user_id,
+    chat_username, chat_profile_picture, -- NEW
+    last_message, last_seen, unread_count,
+    created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+  ON DUPLICATE KEY UPDATE
+    chat_username = VALUES(chat_username), -- NEW
+    chat_profile_picture = VALUES(chat_profile_picture), -- NEW
+    last_message = VALUES(last_message),
+    last_seen = VALUES(last_seen),
+    unread_count = CASE 
+      WHEN VALUES(unread_count) > 0 THEN VALUES(unread_count)
+      ELSE unread_count 
+    END,
+    updated_at = NOW()
+`, [
+  userId,
+  chatData.userId,
+  chatData.username,
+  chatData.profile_picture,
+  chatData.lastMessage,
+  chatData.lastSeen,
+  chatData.unreadCount || 0
+]);
+
       }
 
       await connection.commit();
