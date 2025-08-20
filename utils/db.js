@@ -12,6 +12,7 @@ const dbConfig = {
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
+  compress: false,
   ssl: {
     rejectUnauthorized: true
   }
