@@ -61,56 +61,60 @@ async function handleGet(req, res, connection, query) {
       
       // Single lightning-fast query
       const [rows] = await connection.execute(`
-        SELECT 
-          chat_partner.user_id AS userId,
-          chat_partner.user_id AS id,
-          COALESCE(rc.chat_username, CONCAT('User ', chat_partner.user_id)) AS username,
-          COALESCE(rc.chat_profile_picture, 'default-pfp.jpg') AS profile_picture,
-          latest_msg.content AS lastMessage,
-          latest_msg.created_at AS lastSeen,
-          COALESCE(unread_count.count, 0) AS unreadCount
-        FROM (
-          SELECT DISTINCT
-            CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END AS user_id
-          FROM messages 
-          WHERE sender_id = ? OR receiver_id = ?
-          ORDER BY 
-            (SELECT MAX(created_at) FROM messages m 
-             WHERE (m.sender_id = ? AND m.receiver_id = CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END)
-                OR (m.receiver_id = ? AND m.sender_id = CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END)
-            ) DESC
-          LIMIT 20
-        ) chat_partner
-        
-        LEFT JOIN (
-          SELECT 
-            CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END AS other_user_id,
-            content,
-            created_at,
-            ROW_NUMBER() OVER (
-              PARTITION BY CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END 
-              ORDER BY created_at DESC
-            ) as rn
-          FROM messages 
-          WHERE sender_id = ? OR receiver_id = ?
-        ) latest_msg ON latest_msg.other_user_id = chat_partner.user_id AND latest_msg.rn = 1
-        
-        LEFT JOIN (
-          SELECT sender_id, COUNT(*) as count
-          FROM messages 
-          WHERE receiver_id = ? AND is_read = FALSE
-          GROUP BY sender_id
-        ) unread_count ON unread_count.sender_id = chat_partner.user_id
-        
-        LEFT JOIN recent_chats rc ON rc.user_id = ? AND rc.chat_user_id = chat_partner.user_id
-        
-        ORDER BY latest_msg.created_at DESC
-      `, [
-        userId, userId, userId, userId, userId, userId, userId, // chat_partner subquery
-        userId, userId, userId, userId, // latest_msg subquery  
-        userId, // unread_count subquery
-        userId  // recent_chats join
-      ]);
+  SELECT 
+    chat_partner.user_id AS userId,
+    chat_partner.user_id AS id,
+    COALESCE(rc.chat_username, CONCAT('User ', chat_partner.user_id)) AS username,
+    COALESCE(rc.chat_profile_picture, 'default-pfp.jpg') AS profile_picture,
+    latest_msg.content AS lastMessage,
+    latest_msg.timestamp AS lastSeen,
+    COALESCE(unread_count.count, 0) AS unreadCount
+  FROM (
+    SELECT DISTINCT
+      CASE WHEN username = ? THEN chatwith ELSE username END AS user_id
+    FROM messages 
+    WHERE username = ? OR chatwith = ?
+    ORDER BY (
+      SELECT MAX(m2.timestamp) FROM messages m2 
+      WHERE (m2.username = ? AND m2.chatwith = CASE WHEN username = ? THEN chatwith ELSE username END)
+         OR (m2.chatwith = ? AND m2.username = CASE WHEN username = ? THEN chatwith ELSE username END)
+    ) DESC
+    LIMIT 20
+  ) chat_partner
+
+  LEFT JOIN (
+    SELECT 
+      CASE WHEN username = ? THEN chatwith ELSE username END AS other_user_id,
+      content,
+      timestamp,
+      ROW_NUMBER() OVER (
+        PARTITION BY CASE WHEN username = ? THEN chatwith ELSE username END 
+        ORDER BY timestamp DESC
+      ) as rn
+    FROM messages 
+    WHERE username = ? OR chatwith = ?
+  ) latest_msg 
+  ON latest_msg.other_user_id = chat_partner.user_id AND latest_msg.rn = 1
+
+  LEFT JOIN (
+    SELECT username, COUNT(*) as count
+    FROM messages 
+    WHERE chatwith = ? AND is_read = FALSE
+    GROUP BY username
+  ) unread_count ON unread_count.username = chat_partner.user_id
+
+  LEFT JOIN recent_chats rc 
+  ON rc.user_id = ? AND rc.chat_user_id = chat_partner.user_id
+
+  ORDER BY latest_msg.timestamp DESC
+`, [
+  userId, userId, userId, userId, userId, userId, userId, // chat_partner
+  userId, userId, userId, userId,                         // latest_msg
+  userId,                                                 // unread_count
+  userId                                                  // recent_chats join
+]);
+
+      
 
       const duration = Date.now() - startTime;
       console.log(`Direct query executed in ${duration}ms for user ${userId}`);
