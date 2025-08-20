@@ -53,26 +53,29 @@ async function handleGet(req, res, connection, query) {
 
     try {
       const [rows] = await connection.execute(`
-        SELECT 
-          rc.chat_user_id AS userId,
-          rc.chat_user_id AS id,
-          rc.last_message AS lastMessage,
-          rc.last_seen AS lastSeen,
-          rc.unread_count AS unreadCount
-        FROM recent_chats rc
-        WHERE rc.user_id = ?
-        ORDER BY rc.updated_at DESC
-        LIMIT 20
-      `, [userId]);
+  SELECT 
+    rc.chat_user_id AS userId,
+    rc.chat_user_id AS id,
+    rc.chat_username AS username,
+    rc.chat_profile_picture AS profile_picture,
+    rc.last_message AS lastMessage,
+    rc.last_seen AS lastSeen,
+    rc.unread_count AS unreadCount
+  FROM recent_chats rc
+  WHERE rc.user_id = ?
+  ORDER BY rc.updated_at DESC
+  LIMIT 20
+`, [userId]);
 
-      const recentChats = rows.map(row => ({
-        userId: row.userId,
-        id: row.id,
-        lastMessage: row.lastMessage || 'Tap to start chatting',
-        lastSeen: row.lastSeen || new Date().toISOString(),
-        unreadCount: row.unreadCount || 0
-      }));
-
+const recentChats = rows.map(row => ({
+  userId: row.userId,
+  id: row.id,
+  username: row.username,
+  profile_picture: row.profile_picture || 'default-pfp.jpg',
+  lastMessage: row.lastMessage || 'Tap to start chatting',
+  lastSeen: row.lastSeen || new Date().toISOString(),
+  unreadCount: row.unreadCount || 0
+}));
       return res.status(200).json({ recentChats });
 
     } catch (error) {
